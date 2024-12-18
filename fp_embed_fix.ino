@@ -133,14 +133,56 @@ void setup() {
 
 void loop() {
   if (scorePlayer1 >= GAME_POINT && scorePlayer2 >= GAME_POINT && abs(scorePlayer1 - scorePlayer2) < 2) {
-    deuce = true;  // Deuce condition
+    if (!deuce) {
+        deuce = true;  // Enter Deuce condition
+        DisplayDeuce();  // Announce Deuce only once
+    }
   }
 
-  // Display Deuce if required
-  if (deuce) {
-    DisplayDeuce();
-    deuce = false;
+  // Check if Player 1 wins
+  if (scorePlayer1 >= GAME_POINT && scorePlayer1 >= scorePlayer2 + 2) {
+      deuce = false;  // Exit Deuce condition
+      
+      // Activate Parola
+      activateParola();
+
+      // Set text with scrolling animation
+      parola.displayText("WIN >>>", PA_RIGHT, 50, 500, PA_MESH, PA_NO_EFFECT);
+
+      // Animate text until the animation is complete
+      while (!parola.displayAnimate()) {
+        // Continue animating
+      }
+      PlayFinalVictory();
+      // Deactivate Parola
+      deactivateParola();
+    
+      AnnounceWinner("Right Win");
+      return;  // End loop to reset the game
   }
+
+  // Check if Player 2 wins
+  if (scorePlayer2 >= GAME_POINT && scorePlayer2 >= scorePlayer1 + 2) {
+      deuce = false;  // Exit Deuce condition
+      
+      // Activate Parola
+      activateParola();
+
+      // Set text with scrolling animation
+      parola.displayText("WIN <<<", PA_LEFT, 50, 500, PA_MESH, PA_NO_EFFECT);
+
+      // Animate text until the animation is complete
+      while (!parola.displayAnimate()) {
+        // Continue animating
+      }
+      PlayFinalVictory();
+      // Deactivate Parola
+      deactivateParola();
+
+      AnnounceWinner("Left Win");
+      return;  // End loop to reset the game
+  }
+
 
   // Check if Player 1 wins
   if (scorePlayer1 >= GAME_POINT && scorePlayer1 >= scorePlayer2 + 2) {
@@ -462,7 +504,7 @@ void AnnounceWinner(const char* winnerText) {
   activateParola();
 
   // Set text with scrolling animation
-  parola.displayText(winnerText, PA_LEFT, 50, 200, PA_SCROLL_LEFT, PA_GROW_DOWN);
+  parola.displayText(winnerText, PA_RIGHT, 50, 200, PA_SCROLL_LEFT, PA_GROW_DOWN);
 
   // Animate text until the animation is complete
   while (!parola.displayAnimate()) {
@@ -491,16 +533,17 @@ void ResetGame() {
 
 
 void DisplayDeuce() {
-  DisplayStaticText("DEUCE");
-
-  // Play notification sound
-  for (int i = 0; i < 3; i++) {
+    activateParola();
+    parola.displayText("DEUCE", PA_CENTER, 40, 500, PA_SCROLL_LEFT, PA_NO_EFFECT);
+    while (!parola.displayAnimate()) {
+        // Non-blocking animation
+    }
+    for (int i = 0; i < 3; i++) {
     tone(BUZZER_PIN, 400, 150);
     delay(200);
     noTone(BUZZER_PIN);
-  }
-
-  delay(2000);  // Pause before resuming the game
+    }
+    deactivateParola();
 }
 
 void PlayBeep() {
