@@ -333,7 +333,7 @@ void StartCountdown() {
   }
 
   // Display "SWING!" with a high note
-  DisplayStaticText("SWING");
+  DisplayStaticText("GO");
   tone(BUZZER_PIN, 1000, 500);  // High pitch sound for 500ms
   delay(1500);                  // Display SWING for 1.5 seconds
   noTone(BUZZER_PIN);           // Stop sound
@@ -346,9 +346,9 @@ void AnnounceWinner(const char* winnerText) {
 
   // Play victory sound based on the winner
   if (strcmp(winnerText, "Left Win") == 0) {
-    PlayVictorySound(1);  // Left player wins
+    PlayFinalVictory();
   } else if (strcmp(winnerText, "Right Win") == 0) {
-    PlayVictorySound(2);  // Right player wins
+    PlayFinalVictory();
   }
 
   delay(3000);  // Show "WIN" for 3 seconds
@@ -369,7 +369,6 @@ void ResetGame() {
 
 void DisplayDeuce() {
   DisplayStaticText("DEUCE");
-
 
   // Play notification sound
   for (int i = 0; i < 3; i++) {
@@ -408,23 +407,20 @@ void PlayVictorySound(int player) {
 
 void DisplayStaticText(const char* text) {
   int textLength = 0;
-
-  // Calculate the length of the text
   for (int i = 0; text[i] != '\0'; i++) {
     textLength++;
   }
 
-  // Clear the entire LED matrix
+  int totalWidth = 8 * MAX_DEVICES;  // Total display width
+  int textWidth = textLength * 8;    // Each character is 8 columns wide
+  int startCol = (totalWidth - textWidth) / 2;
+
+  // Clear all displays
   for (int i = 0; i < MAX_DEVICES; i++) {
     ledMatrix.clearDisplay(i);
   }
 
-  // Calculate the starting column to center the text
-  int totalWidth = 8 * MAX_DEVICES;
-  int textWidth = textLength * 8;
-  int startCol = (totalWidth - textWidth) / 2;
-
-  // Display each character one by one
+  // Draw each character one by one
   for (int i = 0; text[i] != '\0'; i++) {
     DisplayChar(text[i], startCol + (i * 8));
   }
@@ -432,19 +428,20 @@ void DisplayStaticText(const char* text) {
 
 
 
+
 // Function to display a single character
 void DisplayChar(char letter, int startCol) {
   static const byte font[][8] = {
-    // Characters: P, O, N, G, S, W (8x8 bitmaps)
     {B11111, B10001, B10001, B11111, B10000, B10000, B10000, B00000},  // P
     {B01110, B10001, B10001, B10001, B10001, B10001, B01110, B00000},  // O
     {B11111, B10001, B10001, B10001, B10001, B10001, B11111, B00000},  // N
     {B01110, B10001, B10001, B10001, B10001, B10001, B01110, B00000},  // G
     {B11111, B10000, B11110, B10000, B11111, B00000, B00000, B00000},  // S
-    {B10001, B11011, B10101, B10101, B10101, B10001, B10001, B00000}   // W
+    {B10001, B11011, B10101, B10101, B10101, B10001, B10001, B00000},  // W
+    {B01110, B10001, B10001, B10001, B10001, B10001, B01110, B00000}   // Default: O
   };
 
-  int index;
+  int index = 6;  // Default to 'O' for unsupported letters
   switch (letter) {
     case 'P': index = 0; break;
     case 'O': index = 1; break;
@@ -452,17 +449,15 @@ void DisplayChar(char letter, int startCol) {
     case 'G': index = 3; break;
     case 'S': index = 4; break;
     case 'W': index = 5; break;
-    default: return;  // Ignore invalid characters
   }
 
   for (int row = 0; row < 8; row++) {
     for (int col = 0; col < 8; col++) {
-      int globalCol = startCol + col;
-      int device = globalCol / 8;       // Determine which device
-      int localCol = globalCol % 8;     // Column on that device
+      int globalCol = startCol + col;    // Position across all devices
+      int device = globalCol / 8;        // Which device
+      int localCol = globalCol % 8;      // Column on the device
 
-      // Set or clear the LED pixel
-      if (device < MAX_DEVICES) {
+      if (device >= 0 && device < MAX_DEVICES) {
         ledMatrix.setLed(device, row, localCol, font[index][row] & (1 << (7 - col)));
       }
     }
@@ -471,34 +466,37 @@ void DisplayChar(char letter, int startCol) {
 
 
 
+
 void DisplayNumber(int num) {
   static const byte numbers[][8] = {
     {B01110, B10001, B10001, B10001, B10001, B10001, B01110, B00000}, // 0
     {B00100, B01100, B00100, B00100, B00100, B00100, B01110, B00000}, // 1
-    {B01110, B10001, B00001, B00010, B00100, B01000, B11111, B00000}, // 2
+    {B11111, B00001, B00010, B00100, B01000, B10000, B11111, B00000}, // 2
     {B01110, B10001, B00001, B00110, B00001, B10001, B01110, B00000}  // 3
   };
 
-  for (int i = 0; i < MAX_DEVICES; i++) {
-    ledMatrix.clearDisplay(i);  // Clear all displays
-  }
-
-  // Center the number across the matrix
   int totalWidth = 8 * MAX_DEVICES;
   int startCol = (totalWidth - 8) / 2;
 
-  for (int row = 0; row < 8; row++) {
+  // Clear all displays
+  for (int i = 0; i < MAX_DEVICES; i++) {
+    ledMatrix.clearDisplay(i);
+  }
+
+  // Draw the number
+  for (int row = 7; row >= 0; row--) {  // Reverse row order for correct orientation
     for (int col = 0; col < 8; col++) {
       int globalCol = startCol + col;
       int device = globalCol / 8;
       int localCol = globalCol % 8;
 
-      if (device < MAX_DEVICES) {
-        ledMatrix.setLed(device, row, localCol, numbers[num][row] & (1 << (7 - col)));
+      if (device >= 0 && device < MAX_DEVICES) {
+        ledMatrix.setLed(device, row, localCol, (numbers[num][7 - row] >> col) & 1);
       }
     }
   }
 }
+
 
 
 
@@ -511,6 +509,17 @@ void PlayWelcomeMelody() {
     delay(noteDurations[i] + 50);
     noTone(BUZZER_PIN);
   }
+}
+
+void PlayFinalVictory() {
+  int melody[] = {932, 932, 988, 988, 1047, 1047, 880, 784, 698}; // Ais, B, C, A, G, F
+  int durations[] = {200, 200, 200, 200, 50, 50, 50, 50, 150}; // Durations in milliseconds
+
+  for (int i = 0; i < 9; i++) {
+    tone(BUZZER_PIN, melody[i], durations[i]);
+    delay(durations[i] + 50); // Pause between notes
+  }
+  noTone(BUZZER_PIN); // Turn off buzzer after melody
 }
 
 
