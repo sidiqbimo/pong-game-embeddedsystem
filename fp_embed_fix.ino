@@ -1,10 +1,27 @@
+#include <MD_Parola.h>
+#include <MD_MAX72xx.h>
 #include <LedControl.h>
 
-// Define the hardware configuration
-#define MAX_DEVICES 4  // Number of cascaded MAX7219 devices
-#define CLK_PIN 15     // CLK or SCK pin ; default 15
-#define CS_PIN 2       // CS or LOAD pin default 2
-#define DATA_PIN 4     // DIN or MOSI pin default 4
+#define HARDWARE_TYPE MD_MAX72XX::FC16_HW 
+
+// Hardware SPI pins
+#define CLK_PIN 15
+#define DATA_PIN 4
+#define CS_PIN 2 
+
+// Parola setup
+#define MAX_DEVICES_PAROLA 4  // Number of modules for Parola
+MD_Parola parola = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES_PAROLA);
+
+// LedControl setup
+#define MAX_DEVICES_LEDCONTROL 4  // Number of modules for LedControl
+LedControl ledMatrix = LedControl(DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES_LEDCONTROL);
+
+#define MAX_TOTAL_DEVICES 4
+byte display[8][8 * MAX_TOTAL_DEVICES];  // Array for ON/OFF display state
+
+// // Define the hardware configuration
+// #define MAX_TOTAL_DEVICES 4  // Number of cascaded MAX7219 devices
 
 #define BUZZER_PIN 23  //default 23
 
@@ -17,11 +34,14 @@
 #define GAME_POINT 11  // Winning point
 bool deuce = false;    // Flag for deuce condition
 
+bool isPlayingSmashSound = false; // Is the sound playing
+bool smashTriggered = false; 
+int smashSoundFreq = 2000;       // Start frequency
+unsigned long lastSmashTime = 0; // Time of last sound step
+const int smashStepDelay = 50;   // Time between steps
+
 int scorePlayer1 = 0;
 int scorePlayer2 = 0;
-
-// Create an instance of LedControl
-LedControl ledMatrix = LedControl(DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
 
 // Game variables
 struct Vector2 {
@@ -29,7 +49,6 @@ struct Vector2 {
   int y;
 };
 
-byte display[8][8 * MAX_DEVICES];  // ON or OFF
 Vector2 pongPosition;
 Vector2 pongVelocity;
 
@@ -62,19 +81,31 @@ void setup() {
   Serial.begin(115200);
   Serial.println("Game Starting...");
 
-  // Initialize LED matrix
-  for (int i = 0; i < MAX_DEVICES; i++) {
+  pinMode(CS_PIN, OUTPUT);  // Set CS_PIN as output
+  digitalWrite(CS_PIN, HIGH);  // Initially disable all devices
+
+  activateParola();
+  parola.begin();
+  parola.setIntensity(5);  // Adjust brightness (0-15)
+  parola.setTextAlignment(PA_CENTER);  // Center align text
+  // parola.transform(MD_MAX72XX::TFR_ROT_180);
+  deactivateParola();
+
+  activateLedControl();
+  // Initialize LedControl
+  for (int i = 0; i < MAX_DEVICES_LEDCONTROL; i++) {
     ledMatrix.shutdown(i, false);   // Wake up MAX7219
-    ledMatrix.setIntensity(i, 10);  // Set brightness level (0-15)
-    ledMatrix.clearDisplay(i);      // Clear all LEDs
+    ledMatrix.setIntensity(i, 10);  // Brightness level (0-15)
+    ledMatrix.clearDisplay(i);      // Clear LEDs
   }
+  deactivateLedControl();
 
   // Game initialization
-  pongPosition = { 8 * MAX_DEVICES / 2 - 1, 8 / 2 - 1 };
+  pongPosition = { 8 * MAX_TOTAL_DEVICES / 2 - 1, 8 / 2 - 1 };
   pongVelocity = { 1, 1 };
 
   player1Position = { 7, 8 / 2 - 1 };
-  player2Position = { 8 * MAX_DEVICES - 8, 8 / 2 - 1 };
+  player2Position = { 8 * MAX_TOTAL_DEVICES - 8, 8 / 2 - 1 };
 
   pinMode(BUTTON1_PIN, INPUT_PULLUP); // Configure Button 1 with internal pull-up resistor
   pinMode(BUTTON2_PIN, INPUT_PULLUP); // Configure Button 2 with internal pull-up resistor
@@ -112,7 +143,8 @@ void loop() {
   UpdatePongPosition();
   DisplayScores();
   DisplayMatrix();
-  delay(50);
+  
+  delay(40);
 
   if (digitalRead(BUTTON1_PIN) == LOW) {
   Serial.println("Button 1 Pressed");
@@ -126,7 +158,9 @@ void loop() {
 
 // Display the current frame on the LED matrix
 void DisplayMatrix() {
-  for (int device = 0; device < MAX_DEVICES; device++) {
+  activateLedControl();  // Activate LedControl
+
+  for (int device = 0; device < MAX_TOTAL_DEVICES; device++) {
     for (int row = 0; row < 8; row++) {
       byte rowData = 0;  // Represents the 8 pixels in a row
 
@@ -142,10 +176,15 @@ void DisplayMatrix() {
       ledMatrix.setRow(device, row, rowData);
     }
   }
+
+  deactivateLedControl();  // Deactivate LedControl
 }
+
 
 void UpdatePongPosition() {
   // Reset the current pong position on the display
+  Vector2 prevPosition = pongPosition;
+  
   display[pongPosition.y][pongPosition.x] = 0;
 
   // Check collision with Player 1 paddle
@@ -154,10 +193,15 @@ void UpdatePongPosition() {
     pongVelocity.x = 1;  // Reverse X direction
     PlayBeep();
 
-    // Smash boost if BUTTON1_PIN is pressed
     if (digitalRead(BUTTON1_PIN) == LOW) {
-      Serial.println("Smash 1 activated!");
-      pongVelocity.x = 3;  // Increase speed in the X direction
+    if (!smashTriggered) { // Trigger only once per smash
+        Serial.println("Smash 1 activated!");
+        pongVelocity.x = 3;  // Increase speed in the X direction
+        PlaySmashSound();    // Play smash sound
+        smashTriggered = true; // Prevent re-trigger
+    }
+    } else {
+        smashTriggered = false; // Reset when button is released
     }
 
     // Randomize vertical direction
@@ -174,8 +218,14 @@ void UpdatePongPosition() {
 
     // Smash boost if BUTTON2_PIN is pressed
     if (digitalRead(BUTTON2_PIN) == LOW) {
-      Serial.println("Smash 2 activated!");
-      pongVelocity.x = -3;  // Increase speed in the X direction
+    if (!smashTriggered) { // Trigger only once per smash
+        Serial.println("Smash 2 activated!");
+        pongVelocity.x = -3; // Increase speed in the X direction
+        PlaySmashSound();    // Play smash sound
+        smashTriggered = true; // Prevent re-trigger
+    }
+    } else {
+        smashTriggered = false; // Reset when button is released
     }
 
     // Randomize vertical direction
@@ -197,7 +247,7 @@ void UpdatePongPosition() {
   }
 
   // Check if ball goes past Player 2
-  if (pongPosition.x >= 8 * MAX_DEVICES - 1) {
+  if (pongPosition.x >= 8 * MAX_TOTAL_DEVICES - 1) {
     scorePlayer1++;
     Serial.print("Player 1 Scored! Current Scores - Player 1: ");
     Serial.print(scorePlayer1);
@@ -209,7 +259,7 @@ void UpdatePongPosition() {
   }
 
   // Update X boundaries
-  if (pongPosition.x >= 8 * MAX_DEVICES - 1) {
+  if (pongPosition.x >= 8 * MAX_TOTAL_DEVICES - 1) {
     pongVelocity.x = -1;
     PlayBeep();
   } else if (pongPosition.x <= 0) {
@@ -277,7 +327,7 @@ void MovePlayer2() {
 
 void ResetBall() {
   Serial.println("Resetting Ball...");
-  pongPosition = { 8 * MAX_DEVICES / 2 - 1, 8 / 2 - 1 };    // Center the ball
+  pongPosition = { 8 * MAX_TOTAL_DEVICES / 2 - 1, 8 / 2 - 1 };    // Center the ball
   pongVelocity = { random(0, 2) ? 1 : -1, random(-1, 2) };  // Randomize direction
 }
 
@@ -286,7 +336,7 @@ void DisplayScores() {
   for (int row = 0; row < 8; row++) {
     for (int col = 0; col < 5; col++) {
       display[row][col] = 0; // Clear Player 1 score area (left)
-      display[row][8 * MAX_DEVICES - 5 + col] = 0; // Clear Player 2 score area (right)
+      display[row][8 * MAX_TOTAL_DEVICES - 5 + col] = 0; // Clear Player 2 score area (right)
     }
   }
 
@@ -295,8 +345,8 @@ void DisplayScores() {
   DisplayDigit(scorePlayer1 % 10, 4, 0);   // Ones place
 
   // Display Player 2 score (horizontal on right)
-  DisplayDigit(scorePlayer2 / 10, 0, 8 * MAX_DEVICES - 5);  // Tens place
-  DisplayDigit(scorePlayer2 % 10, 4, 8 * MAX_DEVICES - 5);  // Ones place
+  DisplayDigit(scorePlayer2 / 10, 0, 8 * MAX_TOTAL_DEVICES - 5);  // Tens place
+  DisplayDigit(scorePlayer2 % 10, 4, 8 * MAX_TOTAL_DEVICES - 5);  // Ones place
 }
 
 
@@ -321,27 +371,34 @@ void DisplayDigit(int digit, int startRow, int startCol) {
 
 void StartCountdown() {
   // Display "PONG!" with a melody
-  DisplayStaticText("PONG");
+  parola.displayText("PONG!", PA_CENTER, 40, 50, PA_GROW_UP, PA_NO_EFFECT);
+  while (!parola.displayAnimate()){
+  };  // Animate the text
   PlayWelcomeMelody();
-  delay(1500);  // Display "PONG" for 1.5 seconds
 
-  // Countdown 3...2...1
+  
+  parola.displayText("Sidiq Bimo P. - 5024221002", PA_CENTER, 60, 1000, PA_SCROLL_LEFT, PA_NO_EFFECT);
+  while (!parola.displayAnimate());  // Animate the text
+
+  // Countdown 3...2...1 using Parola
   for (int i = 3; i > 0; i--) {
-    DisplayNumber(i);      // Display countdown number
-    PlayBeep();            // Short beep
-    delay(1000);           // Wait for 1 second
+    char countdownText[2];
+    sprintf(countdownText, "%d", i);  // Convert number to string
+    PlayBeep();                       // Short beep
+    parola.displayText(countdownText, PA_CENTER, 25, 1000, PA_SCROLL_UP, PA_NO_EFFECT);
+    while (!parola.displayAnimate());  // Animate the countdown number
   }
 
-  // Display "SWING!" with a high note
-  DisplayStaticText("GO");
-  tone(BUZZER_PIN, 1000, 500);  // High pitch sound for 500ms
-  delay(1500);                  // Display SWING for 1.5 seconds
-  noTone(BUZZER_PIN);           // Stop sound
+  // Display "GO" with a high note
+  tone(BUZZER_PIN, 1000, 500);       // High pitch sound for 500ms
+  parola.displayText("GO", PA_CENTER, 15, 1000, PA_MESH, PA_NO_EFFECT);
+  while (!parola.displayAnimate());  // Animate "GO"
+  noTone(BUZZER_PIN);                // Stop sound
+  delay(500);
 }
 
 void AnnounceWinner(const char* winnerText) {
-  // Clear the display and show winner text
-  ledMatrix.clearDisplay(0);
+  // Display winner text as scrolling animation
   DisplayStaticText(winnerText);
 
   // Play victory sound based on the winner
@@ -356,11 +413,13 @@ void AnnounceWinner(const char* winnerText) {
 }
 
 
+
+
 void ResetGame() {
   ledMatrix.clearDisplay(0);
   scorePlayer1 = 0;
   scorePlayer2 = 0;
-  pongPosition = {8 * MAX_DEVICES / 2 - 1, 8 / 2 - 1};
+  pongPosition = {8 * MAX_TOTAL_DEVICES / 2 - 1, 8 / 2 - 1};
   pongVelocity = {1, 1};
   deuce = false;
   StartCountdown();
@@ -406,27 +465,20 @@ void PlayVictorySound(int player) {
 }
 
 void DisplayStaticText(const char* text) {
-  int textLength = 0;
-  for (int i = 0; text[i] != '\0'; i++) {
-    textLength++;
-  }
+    // Activate Parola
+    activateParola();
+    
+    // Set text with scrolling animation
+    parola.displayText(text, PA_CENTER, 50, 1000, PA_SCROLL_LEFT, PA_WIPE);
 
-  int totalWidth = 8 * MAX_DEVICES;  // Total display width
-  int textWidth = textLength * 8;    // Each character is 8 columns wide
-  int startCol = (totalWidth - textWidth) / 2;
+    // Animate text until the animation is complete
+    while (!parola.displayAnimate()) {
+        // Continue animating
+    }
 
-  // Clear all displays
-  for (int i = 0; i < MAX_DEVICES; i++) {
-    ledMatrix.clearDisplay(i);
-  }
-
-  // Draw each character one by one
-  for (int i = 0; text[i] != '\0'; i++) {
-    DisplayChar(text[i], startCol + (i * 8));
-  }
+    // Deactivate Parola
+    deactivateParola();
 }
-
-
 
 
 // Function to display a single character
@@ -457,13 +509,12 @@ void DisplayChar(char letter, int startCol) {
       int device = globalCol / 8;        // Which device
       int localCol = globalCol % 8;      // Column on the device
 
-      if (device >= 0 && device < MAX_DEVICES) {
+      if (device >= 0 && device < MAX_TOTAL_DEVICES) {
         ledMatrix.setLed(device, row, localCol, font[index][row] & (1 << (7 - col)));
       }
     }
   }
 }
-
 
 
 
@@ -475,27 +526,28 @@ void DisplayNumber(int num) {
     {B01110, B10001, B00001, B00110, B00001, B10001, B01110, B00000}  // 3
   };
 
-  int totalWidth = 8 * MAX_DEVICES;
+  int totalWidth = 8 * MAX_TOTAL_DEVICES;
   int startCol = (totalWidth - 8) / 2;
 
   // Clear all displays
-  for (int i = 0; i < MAX_DEVICES; i++) {
+  for (int i = 0; i < MAX_TOTAL_DEVICES; i++) {
     ledMatrix.clearDisplay(i);
   }
 
   // Draw the number
-  for (int row = 7; row >= 0; row--) {  // Reverse row order for correct orientation
+  for (int row = 0; row < 8; row++) {  // Keep the original row order
     for (int col = 0; col < 8; col++) {
       int globalCol = startCol + col;
       int device = globalCol / 8;
       int localCol = globalCol % 8;
 
-      if (device >= 0 && device < MAX_DEVICES) {
-        ledMatrix.setLed(device, row, localCol, (numbers[num][7 - row] >> col) & 1);
+      if (device >= 0 && device < MAX_TOTAL_DEVICES) {
+        ledMatrix.setLed(device, 7 - row, localCol, (numbers[num][row] >> (7 - col)) & 1);
       }
     }
   }
 }
+
 
 
 
@@ -522,4 +574,45 @@ void PlayFinalVictory() {
   noTone(BUZZER_PIN); // Turn off buzzer after melody
 }
 
+void PlaySmashSound() {
+    // Stop any ongoing sound
+    noTone(BUZZER_PIN);
+
+    // Non-blocking smash sound effect: Quick high-to-low pitch sweep
+    tone(BUZZER_PIN, 2000, 50); // High pitch for 50ms
+    tone(BUZZER_PIN, 1500, 50); // Medium pitch for 50ms
+
+    // Stop the buzzer after the sequence
+    noTone(BUZZER_PIN);
+}
+
+
+
+
+void displayParolaText(const char* text) {
+  parola.setTextBuffer(text);  // Set the text to display
+  parola.displayReset();       // Prepare the display
+
+  while (!parola.displayAnimate()) {
+    // Keep animating text until complete
+  }
+}
+
+void activateParola() {
+  deactivateLedControl();       // Ensure LedControl is disabled
+  digitalWrite(CS_PIN, LOW);    // Enable Parola (shared CS_PIN)
+}
+
+void deactivateParola() {
+  digitalWrite(CS_PIN, HIGH);   // Disable Parola
+}
+
+void activateLedControl() {
+  deactivateParola();           // Ensure Parola is disabled
+  digitalWrite(CS_PIN, LOW);    // Enable LedControl (shared CS_PIN)
+}
+
+void deactivateLedControl() {
+  digitalWrite(CS_PIN, HIGH);   // Disable LedControl
+}
 
